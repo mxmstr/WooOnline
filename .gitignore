@@ -1,0 +1,7 @@
+/server.db
+/server.db-shm
+/server.db-wal
+/.env
+/stranglehold-server
+/stranglehold-server.exe
+/.gocache/
