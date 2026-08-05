@@ -173,6 +173,11 @@ func (g *Gathering) RenderSettingsForBrowse() []byte {
 		if len(out) >= 0x20 {
 			binary.LittleEndian.PutUint32(out[0x1c:0x20], g.OwnerPID)
 		}
+		settingsStart := displayOffset + 2 + int(binary.LittleEndian.Uint16(out[displayOffset:displayOffset+2]))
+		countOffset := settingsStart + participantCountOffsetInSettings
+		if countOffset+4 <= end {
+			binary.LittleEndian.PutUint32(out[countOffset:countOffset+4], uint32(max(0, len(g.Participants)-1)))
+		}
 		return out[:end]
 	}
 	if len(out) < displayOffset+2 {

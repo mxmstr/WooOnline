@@ -52,7 +52,7 @@ func (s *Services) lookupOrCreateAccount(_ *rmc.Dispatcher, connection *prudp.Co
 		return rmc.ResponseError{Protocol: accountProtocol, Call: request.Call, Code: 0x80020001}
 	}
 	connection.UserPID = account.PID
-	s.Identity.SetAuthenticatedPID(connection.Remote.IP.String(), account.PID)
+	s.Identity.SetAuthenticatedPID(connection.RemoteKey(), account.PID)
 	password := []byte("h7fyctiuucf")
 	preHashed := false
 	if stringKey != "" {

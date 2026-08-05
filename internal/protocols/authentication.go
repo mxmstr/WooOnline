@@ -76,7 +76,7 @@ func (s *Services) login(_ *rmc.Dispatcher, connection *prudp.Connection, reques
 	s.authMu.Lock()
 	s.sessionKeys[credentials.PID] = append([]byte(nil), sessionKey...)
 	s.authMu.Unlock()
-	s.Identity.SetAuthenticatedPID(connection.Remote.IP.String(), credentials.PID)
+	s.Identity.SetAuthenticatedPID(connection.RemoteKey(), credentials.PID)
 	connection.UserPID = credentials.PID
 
 	var out wire.Writer
@@ -201,7 +201,7 @@ func (s *Services) HandleConnectACK(connection *prudp.Connection, incoming []byt
 		innerPID := binary.LittleEndian.Uint32(plain[:4])
 		clientConnectionID := binary.LittleEndian.Uint32(plain[8:12])
 		connection.UserPID = pid
-		s.Identity.SetAuthenticatedPID(connection.Remote.IP.String(), pid)
+		s.Identity.SetAuthenticatedPID(connection.RemoteKey(), pid)
 		if innerPID != pid {
 			s.Logger.Debug("CONNECT proof PID differs from session owner",
 				"remote", connection.Remote, "inner_pid", innerPID, "pid", pid)

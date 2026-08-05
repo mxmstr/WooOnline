@@ -27,7 +27,7 @@ func (s *Services) registerSecure(dispatcher *rmc.Dispatcher) {
 
 func (s *Services) attachIdentity(connection *prudp.Connection) {
 	if connection.UserPID == 0 {
-		connection.UserPID = s.Identity.AuthenticatedPID(connection.Remote.IP.String())
+		connection.UserPID = s.Identity.AuthenticatedPID(connection.RemoteKey())
 	}
 }
 

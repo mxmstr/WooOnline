@@ -103,3 +103,37 @@ func TestGuestLoginCredentialAndConnectProof(t *testing.T) {
 		t.Fatalf("secure connection pid=%d", secureConnection.UserPID)
 	}
 }
+
+func TestLoginIdentitiesAreScopedToRemoteEndpoint(t *testing.T) {
+	services := newAuthenticationTestServices(t)
+	ip := net.ParseIP("192.0.2.20")
+
+	login := func(username string, port int) *prudp.Connection {
+		connection := prudp.NewConnection(&net.UDPAddr{IP: ip, Port: port}, 30670)
+		var params wire.Writer
+		params.QString(username)
+		if _, ok := services.login(nil, connection, rmc.Request{
+			Protocol: authenticationProtocol, Method: loginMethod, Call: 4, Params: params.Data(),
+		}).(rmc.ResponseOK); !ok {
+			t.Fatalf("login for %s failed", username)
+		}
+		return connection
+	}
+
+	first := login("player_one", 9103)
+	second := login("player_two", 51386)
+	if first.UserPID == second.UserPID {
+		t.Fatalf("logins received the same PID %d", first.UserPID)
+	}
+
+	firstSecure := prudp.NewConnection(&net.UDPAddr{IP: ip, Port: 9103}, 30671)
+	secondSecure := prudp.NewConnection(&net.UDPAddr{IP: ip, Port: 51386}, 30671)
+	services.attachIdentity(firstSecure)
+	services.attachIdentity(secondSecure)
+	if firstSecure.UserPID != first.UserPID {
+		t.Fatalf("first secure PID=%d, want %d", firstSecure.UserPID, first.UserPID)
+	}
+	if secondSecure.UserPID != second.UserPID {
+		t.Fatalf("second secure PID=%d, want %d", secondSecure.UserPID, second.UserPID)
+	}
+}

@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+// Keep encrypted PRUDP payloads comfortably below the game's approximately
+// 1 KB transport packet boundary. PayloadCodec adds one framing byte to every
+// fragment and Codec adds the PRUDP header/checksum around it.
+const reliableFragmentBodySize = 900
+
 type PayloadHandler func(*Connection, []byte)
 type CloseHandler func(string)
 type ConnectACKHandler func(*Connection, []byte) ([]byte, error)
@@ -345,16 +350,45 @@ func (s *Server) sendSimpleACK(connection *Connection, packetType uint8, packetI
 }
 
 func (s *Server) SendReliableData(connection *Connection, body []byte) error {
-	payload, err := s.payload.Encode(body)
+	connection.sendMu.Lock()
+	defer connection.sendMu.Unlock()
+	packets, err := s.reliableDataPackets(connection, body)
 	if err != nil {
 		return err
 	}
-	packet := s.basePacket(connection, TypeData, FlagReliable|FlagNeedACK|FlagHasSize)
-	packet.SessionID = connection.ServerSessionID
-	packet.PacketID = connection.NextReliablePacketID()
-	packet.Payload = payload
-	s.sendPacket(packet, connection)
+	for _, packet := range packets {
+		s.sendPacket(packet, connection)
+	}
+	if len(packets) > 1 {
+		s.logger.Info("fragmented reliable DATA", "remote", connection.Remote, "bytes", len(body), "fragments", len(packets))
+	}
 	return nil
+}
+
+func (s *Server) reliableDataPackets(connection *Connection, body []byte) ([]Packet, error) {
+	fragmentCount := max(1, (len(body)+reliableFragmentBodySize-1)/reliableFragmentBodySize)
+	if fragmentCount > 256 {
+		return nil, fmt.Errorf("reliable PRUDP body needs %d fragments, maximum is 256", fragmentCount)
+	}
+	packets := make([]Packet, 0, fragmentCount)
+	for index := range fragmentCount {
+		start := index * reliableFragmentBodySize
+		end := min(len(body), start+reliableFragmentBodySize)
+		fragment := body[start:end]
+		payload, err := s.payload.Encode(fragment)
+		if err != nil {
+			return nil, err
+		}
+		packet := s.basePacket(connection, TypeData, FlagReliable|FlagNeedACK|FlagHasSize)
+		packet.SessionID = connection.ServerSessionID
+		packet.PacketID = connection.NextReliablePacketID()
+		// Quazal treats nonzero IDs as buffered fragments and ID zero as the
+		// final fragment. Counting down also makes the remaining count explicit.
+		packet.FragmentID = uint8(fragmentCount - index - 1)
+		packet.Payload = payload
+		packets = append(packets, packet)
+	}
+	return packets, nil
 }
 
 func (s *Server) sendPacket(packet Packet, connection *Connection) {

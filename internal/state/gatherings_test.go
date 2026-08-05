@@ -23,6 +23,8 @@ func TestStrangleholdGatheringRendering(t *testing.T) {
 	raw = append(raw, urls...)
 
 	registry := NewGatheringRegistry(false, slog.Default())
+	settingsStart := displayQStringOffset + 2 + len(display)
+	binary.LittleEndian.PutUint32(raw[settingsStart+participantCountOffsetInSettings:], 3)
 	gathering := registry.Create(123, "127.0.0.1:5000", raw, nil)
 	if !gathering.IsStrangleholdLayout() {
 		t.Fatal("fixture was not recognized as Stranglehold")
@@ -36,6 +38,9 @@ func TestStrangleholdGatheringRendering(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint32(rendered[0x18:0x1c]); got != 123 {
 		t.Fatalf("owner pid %d", got)
+	}
+	if got := binary.LittleEndian.Uint32(rendered[settingsStart+participantCountOffsetInSettings:]); got != 0 {
+		t.Fatalf("browse participant count %d, want 0", got)
 	}
 	group := gathering.RenderURLGroupForBrowse()
 	if got := binary.LittleEndian.Uint32(group[:4]); got != gathering.ID {

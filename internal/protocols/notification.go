@@ -69,6 +69,19 @@ func (s *Services) pushParticipantsToJoiner(dispatcher *rmc.Dispatcher, gatherin
 	return len(gathering.Participants)
 }
 
+func buildStatsProcessedEvent(sourcePID, gatheringID, txn uint32, stats []byte) []byte {
+	var event wire.Writer
+	event.U32(sourcePID)
+	event.U32(eventStatsProcessed)
+	event.U32(gatheringID)
+	event.U32(txn)
+	// NotificationEvent's fifth DDL member is a Quazal String, whose wire
+	// length is uint16 even when it carries opaque stats bytes.
+	event.U16(uint16(len(stats)))
+	event.Bytes(stats)
+	return event.Data()
+}
+
 func (s *Services) pushStatsProcessed(dispatcher *rmc.Dispatcher, gathering *state.Gathering, sourcePID uint32) int {
 	sent := 0
 	for _, participant := range gathering.Participants {
@@ -99,14 +112,8 @@ func (s *Services) pushStatsProcessed(dispatcher *rmc.Dispatcher, gathering *sta
 		}
 		stats.U32(0)
 
-		var event wire.Writer
-		event.U32(sourcePID)
-		event.U32(eventStatsProcessed)
-		event.U32(gathering.ID)
-		event.U32(txn)
-		event.U16(uint16(stats.Len()))
-		event.Bytes(stats.Data())
-		dispatcher.SendRequest(connection, notificationProtocol, processEventMethod, event.Data())
+		event := buildStatsProcessedEvent(sourcePID, gathering.ID, txn, stats.Data())
+		dispatcher.SendRequest(connection, notificationProtocol, processEventMethod, event)
 		sent++
 	}
 	return sent

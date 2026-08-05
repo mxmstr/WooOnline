@@ -25,6 +25,7 @@ const (
 	endGameMethod            uint32 = 15
 	leaveGatheringMethod     uint32 = 16
 	leaderboardGlobalMethod  uint32 = 17
+	startGameMethod          uint32 = 18
 	closeParticipationMethod uint32 = 19
 	searchGatheringsMethod   uint32 = 20
 	quickMatchMethod         uint32 = 21
@@ -47,6 +48,7 @@ func (s *Services) registerGame(dispatcher *rmc.Dispatcher) {
 	dispatcher.Register(gameProtocol, endGameMethod, s.lifecycle)
 	dispatcher.Register(gameProtocol, leaveGatheringMethod, s.leaveGathering)
 	dispatcher.Register(gameProtocol, leaderboardGlobalMethod, s.leaderboard)
+	dispatcher.Register(gameProtocol, startGameMethod, s.lifecycle)
 	dispatcher.Register(gameProtocol, closeParticipationMethod, s.closeParticipation)
 	dispatcher.Register(gameProtocol, searchGatheringsMethod, s.searchGatherings)
 	dispatcher.Register(gameProtocol, quickMatchMethod, s.quickMatch)
@@ -204,6 +206,7 @@ func (s *Services) createGathering(_ *rmc.Dispatcher, connection *prudp.Connecti
 	var out wire.Writer
 	out.U32(gathering.ID)
 	s.Logger.Info("created gathering", "remote", connection.Remote, "pid", connection.UserPID, "gathering_id", gathering.ID, "params_bytes", len(request.Params))
+	//s.Logger.Info("created gathering wire", "gathering_id", gathering.ID, "params_hex", hex.EncodeToString(request.Params))
 	return gameOK(request, out.Data())
 }
 
@@ -403,8 +406,10 @@ func (s *Services) searchGatherings(_ *rmc.Dispatcher, connection *prudp.Connect
 			active = append(active, gathering)
 		}
 	}
+	response := browseResponse(active)
 	s.Logger.Info("search gatherings", "remote", connection.Remote, "matches", len(active))
-	return gameOK(request, browseResponse(active))
+	//s.Logger.Info("search gatherings wire", "remote", connection.Remote, "response_hex", hex.EncodeToString(response))
+	return gameOK(request, response)
 }
 
 func (s *Services) quickMatch(_ *rmc.Dispatcher, connection *prudp.Connection, request rmc.Request) rmc.Message {
@@ -515,16 +520,10 @@ func (s *Services) lifecycle(dispatcher *rmc.Dispatcher, connection *prudp.Conne
 	if request.Method != reportStatsMethod || len(request.Params) == 0 {
 		return gameOK(request, nil)
 	}
-	priorVector := s.careerVector(connection.UserPID)
-	priorCash := priorVector[5]
 	vec0, vec1, err := parseReportVectors(request.Params, connection.UserPID)
-	newCash := priorCash
 	if err != nil {
 		s.Logger.Warn("parse stats report", "pid", connection.UserPID, "error", err)
 	} else {
-		if len(vec0) > 5 {
-			newCash = vec0[5]
-		}
 		if err := s.Store.PersistMatch(context.Background(), connection.UserPID, vec0, leaderboardRows(vec0, vec1)); err != nil {
 			s.Logger.Error("persist stats report", "pid", connection.UserPID, "error", err)
 		}
@@ -532,9 +531,9 @@ func (s *Services) lifecycle(dispatcher *rmc.Dispatcher, connection *prudp.Conne
 
 	s.statsMu.Lock()
 	s.statsTxn[connection.UserPID]++
-	txn := s.statsTxn[connection.UserPID]
 	s.statsMu.Unlock()
 
+	var completedBatches []*state.Gathering
 	for _, gathering := range s.Gatherings.ContainingPID(connection.UserPID) {
 		gathering.Mu.Lock()
 		if len(gathering.ExpectedReportPIDs) == 0 {
@@ -545,7 +544,7 @@ func (s *Services) lifecycle(dispatcher *rmc.Dispatcher, connection *prudp.Conne
 		gathering.ReceivedReportPIDs[connection.UserPID] = struct{}{}
 		if setContainsAll(gathering.ReceivedReportPIDs, gathering.ExpectedReportPIDs) {
 			gathering.Mu.Unlock()
-			s.fireStatsBatch(dispatcher, gathering, "all-reported")
+			completedBatches = append(completedBatches, gathering)
 		} else if gathering.ReportTimeout == nil {
 			id := gathering.ID
 			gathering.ReportTimeout = time.AfterFunc(30*time.Second, func() {
@@ -559,11 +558,21 @@ func (s *Services) lifecycle(dispatcher *rmc.Dispatcher, connection *prudp.Conne
 		}
 	}
 
-	var out wire.Writer
-	out.U32(1)
-	writeSparkStats(&out, connection.UserPID, "", txn,
-		map[int]float32{5: priorCash}, map[int]float32{10: newCash}, nil, 122, 96, 0)
-	return gameOK(request, out.Data())
+	// SparkProtocolClient method 12 registers no return object. When this report
+	// completes the batch, queue that void response before sending the 901001
+	// notification. The notification synchronously starts method 9 in the game;
+	// delivering it while method 12 is still pending re-enters RVGameContext and
+	// leaves the subsequent lobby-browser call context stuck.
+	response := gameOK(request, nil)
+	if len(completedBatches) == 0 {
+		return response
+	}
+	dispatcher.Send(connection, response)
+	s.Logger.Info("report stats response queued before notification", "remote", connection.Remote, "batches", len(completedBatches))
+	for _, gathering := range completedBatches {
+		s.fireStatsBatch(dispatcher, gathering, "all-reported")
+	}
+	return nil
 }
 
 func setContainsAll(have, want map[uint32]struct{}) bool {

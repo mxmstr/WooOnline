@@ -1,12 +1,63 @@
 package prudp
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"net"
 	"testing"
 	"time"
 )
+
+func TestReliableDataPacketsFragmentAndRoundTrip(t *testing.T) {
+	server := NewServer(30671, "access", "secret", slog.Default())
+	connection := NewConnection(&net.UDPAddr{IP: net.ParseIP("192.0.2.20"), Port: 9103}, 30671)
+	body := make([]byte, 1810)
+	for index := range body {
+		body[index] = byte(index)
+	}
+
+	packets, err := server.reliableDataPackets(connection, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packets) != 3 {
+		t.Fatalf("got %d fragments, want 3", len(packets))
+	}
+	var reassembled []byte
+	for index, packet := range packets {
+		wantFragmentID := uint8(len(packets) - index - 1)
+		if packet.FragmentID != wantFragmentID {
+			t.Fatalf("fragment %d ID=%d, want %d", index, packet.FragmentID, wantFragmentID)
+		}
+		if packet.PacketID != uint16(index+1) {
+			t.Fatalf("fragment %d packet ID=%d, want %d", index, packet.PacketID, index+1)
+		}
+		decoded, err := server.payload.Decode(packet.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reassembled = append(reassembled, decoded...)
+		if rawSize := len(server.packet.Encode(packet)); rawSize > 1000 {
+			t.Fatalf("fragment %d encoded to %d bytes, want at most 1000", index, rawSize)
+		}
+	}
+	if !bytes.Equal(reassembled, body) {
+		t.Fatalf("reassembled %d bytes, want %d", len(reassembled), len(body))
+	}
+}
+
+func TestReliableDataPacketsLeaveSmallBodyUnfragmented(t *testing.T) {
+	server := NewServer(30671, "access", "secret", slog.Default())
+	connection := NewConnection(&net.UDPAddr{IP: net.ParseIP("192.0.2.20"), Port: 9103}, 30671)
+	packets, err := server.reliableDataPackets(connection, []byte("small"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packets) != 1 || packets[0].FragmentID != 0 {
+		t.Fatalf("unexpected packets: %#v", packets)
+	}
+}
 
 func TestLiveSYNHandshake(t *testing.T) {
 	server := NewServer(0, "access", "", slog.Default())

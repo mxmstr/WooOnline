@@ -15,7 +15,8 @@ const (
 )
 
 type Connection struct {
-	mu sync.Mutex
+	mu     sync.Mutex
+	sendMu sync.Mutex
 
 	Remote    *net.UDPAddr
 	LocalPort int
